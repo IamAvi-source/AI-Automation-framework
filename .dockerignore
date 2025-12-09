@@ -1,0 +1,18 @@
+
+# Ignore Maven build output
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+# Ignore IDE files
+.settings/
+.classpath
+.project
+
+# Ignore log files and test outputs
+allure-results/
+test-output/
+ollama_data/

@@ -1,0 +1,84 @@
+========================================
+Framework Self-Healing Logic Explanation
+========================================
+
+This document explains the self-healing process in the automation framework, detailing how `SafeActions`, `SeleniumUtil`, and `LLMHealer` work together to automatically fix broken element locators.
+
+High-Level Connection
+---------------------
+The flow of a healing action is:
+`SafeActions` -> calls -> `SeleniumUtil` -> calls -> `LLMHealer`
+
+Analogy:
+*   `SafeActions`: The Manager. Knows *what* element is needed (e.g., "the login button").
+*   `SeleniumUtil`: The Engineer. Tries the normal approach first. If it fails, calls a specialist.
+*   `LLMHealer`: The Specialist Consultant. Is given the problem and provides a corrected solution.
+
+---
+
+The Detailed Healing Workflow
+-----------------------------
+
+Here is the exact sequence of events when a test tries to interact with an element that has a broken locator.
+
+1. The Initial Call (in a Page Object)
+---------------------------------------
+It all starts in a page object class (e.g., `LoginPage`).
+Example: `actions.click("loginButton", locatorReader, "The login button...");`
+
+
+2. `SafeActions` - The Orchestrator
+----------------------------------
+The call goes to the `SafeActions` class.
+- It uses the `locatorReader` to get the locator string (e.g., `//button[@id='login']`) from your `.properties` file.
+- It then calls the appropriate method in `SeleniumUtil` (e.g., `click`), passing it the locator and the "intent" (the plain English description).
+
+
+3. `SeleniumUtil` - The Healing Trigger
+---------------------------------------
+This is where the core logic resides.
+- The `click` method first calls its own `findElementAndHeal` method.
+- **Attempt #1 (The Happy Path):** It tries to find the element using the standard `driver.findElement()`. If it succeeds, the action is performed, and the process ends.
+- **Attempt #1 Fails (The Problem):** If `driver.findElement()` throws a `NoSuchElementException`, the `catch` block is executed. THIS IS THE TRIGGER for the entire healing process.
+
+
+4. The Healing Process Begins (inside `SeleniumUtil`)
+----------------------------------------------------
+- **Step A: Check the Cache:** It first checks the `HealerCache` (an in-memory map) to see if this exact broken locator was already fixed during the current test run. This avoids slow, repetitive calls to the LLM. If a fix is found in the cache, it uses it.
+
+- **Step B: Call the Specialist (`LLMHealer`):** If the cache is empty, `SeleniumUtil` gathers three critical pieces of information:
+    1. The **Broken Locator** (the original XPath that failed).
+    2. The **Intent** (the plain English description like "The login button...").
+    3. The **Current Page DOM** (`driver.getPageSource()`).
+
+  It then makes the crucial call:
+  `String newLocatorString = LLMHealer.healLocator(locator.toString(), intent, dom);`
+
+
+5. `LLMHealer` - The Brains of the Operation
+-------------------------------------------
+- `LLMHealer` receives the broken locator, intent, and the page's HTML (DOM).
+- It constructs a detailed prompt for the Large Language Model (LLM). The prompt essentially says: "You are a Selenium expert. Here is a broken XPath, here is what the element is supposed to be, and here is the page's HTML. Please analyze the HTML and give me a new, robust XPath that will find this element."
+- It sends this prompt to the LLM via an API call.
+- The LLM analyzes the information and sends back its best guess for a corrected XPath.
+- `LLMHealer` returns this new, healed locator string back to `SeleniumUtil`.
+
+
+6. `SeleniumUtil` - Verification and Caching
+--------------------------------------------
+- `SeleniumUtil` now has the new locator suggested by the LLM.
+- It immediately tries to find the element using this new locator.
+- **If it succeeds:**
+    - The healing is a success!
+    - It stores the fix in the `HealerCache` (e.g., `broken_xpath` -> `healed_xpath`) for future use in the same test run.
+    - It returns the `WebElement` it just found.
+- **If it fails again:** The LLM's suggestion was wrong. It logs the failure, and the test fails, but with a clear message that healing was attempted and also failed.
+
+
+7. `SafeActions` - Persisting the Fix
+-------------------------------------
+- The original method in `SafeActions` (e.g., `click`) now has the element and can proceed. After the action is complete, it performs one last, very important task.
+- It checks the `HealerCache`. If it sees that the locator it originally used now has a healed version in the cache, it knows a successful healing occurred.
+- It then calls `reader.updateLocator(...)` to **write the new, healed locator back into your `.properties` file.**
+
+This final step is what makes the framework truly "self-healing." The next time you run your tests, the framework will use the corrected locator from the start, and the healing process won't even be necessary for that element.
